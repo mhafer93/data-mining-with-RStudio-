@@ -1,0 +1,113 @@
+
+
+```{r}
+library(tidyverse)
+library(readxl)
+
+# Dulles Domestic Flights in 2016
+dulles <- read_excel(path = "/cloud/project/Data/2016 Dulles Domestic Flights.xlsx")
+
+```
+
+
+
+```{r}
+dulles %>% group_by(dest_airport_state) %>% 
+           summarise(n_flights = n(),
+                     n_dest_airports = n_distinct(dest_airport_city),
+                     median_arr_delay = median(arr_delay)) %>% 
+           ungroup() %>% 
+           top_n(10, n_flights) %>% 
+           arrange(desc(n_flights))
+   
+```
+
+
+
+```{r}
+dulles %>% group_by(month_text, day_text) %>% 
+           summarise(n_flights = n(),
+                     min_t_out = min(taxi_out),
+                     median_t_out = median(taxi_out),
+                     max_t_out = max(taxi_out),
+                     avg_t_out = mean(taxi_out),
+                     sd_t_out = sd(taxi_out)) %>% 
+           ungroup() %>% 
+           top_n(10, avg_t_out) %>% 
+           arrange(desc(avg_t_out))
+```
+
+
+```{r}
+dulles %>% group_by(airline_name, day_text) %>% 
+           summarise(prop_delayed = mean(arr_delay > 0)) %>% 
+           spread(key = day_text, value = prop_delayed)
+
+
+```
+
+
+
+```{r}
+dulles %>% group_by(dest_airport_region) %>% 
+           summarise(number_of_flights = n(), 
+                     pct75_arrival_delay = quantile(arr_delay, 0.75)) %>% 
+           gather(key = "summary_statistic", value = "summary_value", 2:3) %>% 
+           spread(key = dest_airport_region, value = summary_value)
+
+
+```
+
+
+
+
+```{r}
+ggplot(data = dulles %>% filter(arr_delay <= 200), 
+       mapping = aes(x = arr_delay, y = ..density..)) +
+  geom_histogram(fill = "#006EA1", color = "white", bins = 50) +
+  labs(title = "Density Histogram of Arrival Delays (200 minutes or less)",
+       x = "Arrival Delay",
+       y = "Proportion of Flights")
+
+
+```
+
+
+
+```{r}
+ggplot(data = dulles, mapping = aes(x = airline_name, fill = airline_name)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "Number of Flights by Airline",
+       x = "Airline", y = "Number of Flights")
+
+
+```
+
+
+```{r}
+dulles <- dulles %>% mutate(arrival_status = ifelse(arr_delay > 0 , "Late", "On-Time"))
+
+ggplot(data = dulles, mapping = aes(x = airline_name, fill = arrival_status)) + 
+       geom_bar(position = "dodge") +
+       coord_flip() +
+       labs(title = "Number of Flights by Arrival Status and Airline",
+            x = "Airline", y = "Number of Flights")
+```
+
+
+
+```{r}
+dep_arr_counts <- dulles %>% filter(arrival_status == "Late") %>% 
+                  group_by(dep_delay, arr_delay) %>% 
+                  summarise(number_of_flights = n())
+
+ggplot(data = dep_arr_counts, mapping = aes(x = dep_delay, y = arr_delay)) +
+       geom_point(alpha = 0.2, aes(size = number_of_flights)) +
+       geom_smooth(method = 'lm', se = FALSE) +
+       labs(title = "Arrival Delay vs Departure Delay With Estimated Linear Regression Line",
+            x = "Departure Delay",
+            y = "Arrival Delay")
+
+```
+

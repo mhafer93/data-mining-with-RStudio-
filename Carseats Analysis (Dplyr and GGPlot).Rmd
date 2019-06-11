@@ -1,0 +1,184 @@
+
+
+```{r}
+library(tidyverse)
+library(broom)
+library(ISLR)
+
+Carseats <- as_tibble(Carseats) # Turn Carseats into a tibble
+Credit <- as_tibble(Credit) # Turn Credit into a tibble
+mpg <- mpg
+```
+
+
+```{r}
+# Information about these data sets if needed
+?Carseats
+?Credit
+```
+
+
+```{r}
+
+carseats_lm <- lm(Sales ~ Price, data = Carseats)
+confint(carseats_lm)
+
+```
+
+
+
+```{r}
+predict(carseats_lm,
+        newdata = data.frame(Price = 110),
+        interval = "confidence",
+        level = 0.95)
+                     
+```
+
+
+```{r}
+predict(carseats_lm,
+        newdata = data.frame(Price = 130),
+        interval = "prediction",
+        level = 0.95)
+                     
+```
+
+
+
+```{r}
+# First gather results using augment()
+carseat_lm_results <- augment(carseats_lm)
+
+# Visualize R2
+ggplot(data = carseat_lm_results, mapping = aes(x = Sales, y = .fitted)) +
+  geom_point(color = "#006EA1", size = 2) +
+  geom_abline(slope = 1, intercept = 0, color = "orange") +
+              labs(title = "Predicted Sales vs Actual Sales \nLinear Regression Using Price as a Predictor",
+              x = "Actual Sales Value",
+              y = "Predicted Sales Value")
+
+```
+
+
+```{r}
+# Residual plot
+ggplot(data = carseat_lm_results, mapping = aes(x = .fitted, y = .resid)) +
+  geom_point(color = "#006EA1") +
+  geom_hline(yintercept = 0, color = "black") +
+              labs(title = "Residuals vs Predicted Sales \nLinear Regression Using Price as a Predictor",
+              x = "Predicted Sales Value",
+              y = "Residual (Prediction Error)")
+
+```
+
+
+
+```{r}
+hwy_displ_lm <- lm(hwy ~ displ, data = mpg)
+
+hwy_disp_results <- augment(hwy_displ_lm)
+
+ggplot(data = hwy_disp_results, mapping = aes(x = .fitted, y = .resid)) +
+      geom_point(color = "#006EA1") + 
+      geom_hline(yintercept = 0, color = "black", linetype = 2) +
+      geom_hline(yintercept = 2*(glance(hwy_displ_lm)$sigma), color = "orange", linetype = 2) +
+      geom_hline(yintercept = -2*(glance(hwy_displ_lm)$sigma), color = "orange", linetype = 2) +
+      labs(title = "Residual Scatter Plot for Linear Regression Fit: hwy ~ displ",
+       y = "Residual",
+       x = "Predicted hwy Value") +
+  theme_light()
+```
+
+
+```{r}
+hwy_displ_lm_2 <- lm(hwy ~ displ + I(displ^2), data = mpg)
+
+hwy_disp_results_2 <- augment(hwy_displ_lm_2)
+
+ggplot(data = hwy_disp_results_2, mapping = aes(x = .fitted, y = .resid)) +
+      geom_point(color = "#006EA1") + 
+      geom_hline(yintercept = 0, color = "black", linetype = 2) +
+      geom_hline(yintercept = 2*(glance(hwy_displ_lm_2)$sigma), color = "orange", linetype = 2) +
+      geom_hline(yintercept = -2*(glance(hwy_displ_lm_2)$sigma), color = "orange", linetype = 2) +
+      labs(title = "Residual Scatter Plot for Linear Regression Fit: hwy ~ displ + displ^2",
+       y = "Residual",
+       x = "Predicted hwy Value") +
+  theme_light()
+```
+
+
+
+```{r}
+full_model <- lm(Sales ~ CompPrice + Income + Advertising + Age + Education + US,
+                 data = Carseats)
+
+reduced_model <- lm(Sales ~ CompPrice + Income + Advertising,
+                 data = Carseats)
+
+anova(reduced_model, full_model)
+```
+
+
+
+```{r}
+full_model <- lm(Balance ~ Cards + Student + Rating + Married,
+                 data = Credit)
+reduced_model <- lm(Balance ~ Cards + Student,
+                 data = Credit)
+
+anova(reduced_model, full_model)
+```
+
+
+
+```{r}
+ggplot(data = Carseats, mapping = aes(x = Income, y = Sales, color = ShelveLoc)) +
+  geom_point() +
+  geom_abline(intercept = 4.101415, 
+              slope = 0.019678, color = "#F8766D") + # Bad
+  geom_abline(intercept = (4.101415 + 5.631364), 
+              slope = (0.019678 - 0.012598), color = "#00BA38") + # Good
+  geom_abline(intercept = (4.101415 + 1.762287), 
+              slope = (0.017929 + 0.001745), color = "#619CFF") + # Medium
+  labs(title = "Sales ~ Income + ShelveLoc + Income:ShelveLoc with Estimated Regression Lines") +
+  theme_light()
+```
+ 
+
+
+```{r}
+null_model <- lm(Balance ~ 1, data = Credit)
+upper_model <- lm(Balance ~ ., data = Credit %>% select(-ID))
+
+optimal_model <- step(null_model, # Starts with Null Model
+                      scope = list(lower = null_model, 
+                      upper = upper_model), # enter both bounds for mixed
+                      method = "both", trace = 0)
+
+augment_results <- augment(optimal_model)
+
+ggplot(data = augment_results, mapping = aes(x = Balance, y = .fitted)) +
+  geom_point(color = "#006EA1", size = 2) +
+  geom_abline(slope = 1, intercept = 0, color = "orange") +
+              labs(title = "Predicted Balance vs Actual",
+              x = "Actual Balance Value",
+              y = "Predicted Balance Value")
+```
+
+
+
+
+
+```{r}
+ggplot(data = augment_results, mapping = aes(x = .resid)) +
+     geom_histogram(aes(y = ..density..), fill = "#006EA1", color = "white", bins = 25) +
+     labs(title = "Density Histogram of Residuals with Normal Distribution",
+          x = "Residuals From Optimal Model",
+          y = "Proportion of Observations") +
+     stat_function(fun = dnorm,
+                   args = list(mean = 0,
+                               sd = glance(optimal_model)$sigma),
+                   color = "orange",
+                   size = 1)
+```

@@ -1,0 +1,306 @@
+
+
+```{r}
+library(tidyverse)
+library(kknn)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(e1071)
+library(readxl)
+
+# Adjust the path as needed
+heart <- read_excel(path = "/cloud/project/Data/Heart Disease.xlsx")
+
+# Recode "HeartDisease" variable for classification
+heart <- heart %>% mutate(HeartDisease = recode_factor(HeartDisease, "No" = "No", "Yes" = "Yes"))
+
+# Turn all other character variables to factors
+heart <- heart %>% mutate_if(is.character, as.factor)
+
+# Split into training and test data
+set.seed(314)
+index_heart <- sample(1:nrow(heart), size = floor(0.7*nrow(heart)))
+heart_training <- heart[index_heart, ]
+heart_test <- heart[-index_heart, ]
+
+# Function for analyzing confusion matrices
+# Function for analyzing confusion matrices
+cf_matrix <- function(actual_vec, pred_prob_vec, positive_val, 
+                      cut_prob = 0.5, search_cut = FALSE) {
+  
+  if (search_cut == FALSE) {
+  actual <- actual_vec == positive_val; pred <- pred_prob_vec >= cut_prob
+  P <- sum(actual); N <- length(actual) - P; TP <- sum(actual & pred)
+  FN <- P - TP; TN <- sum(!(actual) & !(pred)); FP <- N - TN
+  
+  if (TP != 0) { Precision <- TP/(TP + FP); Recall <- TP/(TP + FN)
+                 F1 <- 2*((Precision*Recall)/(Precision + Recall))}
+  
+  if(TP == 0) { Precision = 0; Recall = 0; F1 = 0 }
+ 
+  model_results <- list(confusion_matrix = 
+    data.frame(metric = c("Correct", "Misclassified", "True Positive",
+                           "True Negative","False Negative", "False Positive"),
+               observations = c(TN + TP, FN + FP, TP, TN, FN, FP),
+               rate = c((TN + TP)/(N + P), (FN + FP)/(N + P), TP/P, TN/N, FN/P, FP/N),
+               pct_total_obs = c((TN + TP), (FN + FP), TP, TN, FN, FP)*(1/(N + P)),
+               stringsAsFactors = FALSE),
+    F1_summary = 
+    data.frame(metric = c("Precision", "Recall", "F1 Score"),
+               value = c(Precision, Recall, F1),
+               stringsAsFactors = FALSE))
+return(model_results) } 
+ 
+  if (search_cut == TRUE) {
+    optimal_cut = data.frame(cut_prob = seq(0,1, by = 0.05),
+                             correct_rate = NA, F1_score = NA,
+                             false_pos_rate = NA, false_neg_rate = NA)
+    
+    for (row in (1:nrow(optimal_cut))) {
+      actual <- actual_vec == positive_val 
+      pred <- pred_prob_vec >= optimal_cut$cut_prob[row]
+      P <- sum(actual); N <- length(actual) - P
+      TP <- sum(actual & pred); FN <- P - TP
+      TN <- sum(!(actual) & !(pred)); FP <- N - TN
+  
+      if (TP != 0) { Precision <- TP/(TP + FP); Recall <- TP/(TP + FN)
+          F1 <- 2*((Precision*Recall)/(Precision + Recall))}
+  
+      if(TP == 0) { Precision = 0; Recall = 0; F1 = 0 }
+      
+      optimal_cut[row, 2:5] <- c((TN + TP)/(N + P), F1, FP/N, FN/P)
+    } 
+return(optimal_cut)
+  }
+}
+```
+
+
+```{r}
+set.seed(314) # Set seed so that you get the same result in the future
+
+# Fit a random forest that predicts HeartDisease using all 
+# the predictors in the heart_training data
+heart_rf <- randomForest(HeartDisease ~ ., 
+                         data = heart_training, 
+                         importance = TRUE)
+
+# Plot the results
+varImpPlot(heart_rf, type = 2,
+           pch = 19, # Point style
+           main = "Variable Importance in the Heart Disease Data Set")
+
+```
+
+
+```{r}
+heart_training <- heart_training %>% 
+                  select(HeartDisease, MaxHR, ChestPain, Calcium,
+                         ThalliumStressTest, Oldpeak, RestBP,
+                         Age, Cholesterol)
+
+```
+
+```{r}
+naive_bayes_model <- naiveBayes(HeartDisease ~ .,
+                                data = heart_training)
+
+```
+
+
+```{r}
+nb_training_results <- data.frame(heart_training,
+                                  nb_predicted_0.5 = predict(naive_bayes_model,
+                                                           newdata = heart_training,
+                                                           type = "class"),
+                                  predict(naive_bayes_model,
+                                          newdata = heart_training,
+                                          type = "raw"))
+
+```
+
+
+```{r}
+cf_matrix(actual_vec = nb_training_results$HeartDisease,
+          pred_prob_vec = nb_training_results$Yes,
+          positive_val = "Yes", search_cut = TRUE)
+
+```
+
+
+```{r}
+nb_test_results <- data.frame(heart_test,
+                              nb_predicted_0.5 = predict(naive_bayes_model,
+                                                         newdata = heart_test,
+                                                         type = "class"),
+                              predict(naive_bayes_model,
+                                      newdata = heart_test,
+                                      type = "raw"))
+
+# Add predicted response vector for optimal cut-off
+nb_test_results <- nb_test_results %>% mutate(nb_optimal = ifelse(Yes >= 0.35, "Yes", "No"))
+
+```
+
+
+
+```{r}
+cf_matrix(actual_vec = nb_test_results$HeartDisease,
+          pred_prob_vec = nb_test_results$Yes,
+          positive_val = "Yes",
+          cut_prob = 0.35)
+
+```
+
+
+```{r}
+# Find Optimal K
+train.kknn(HeartDisease ~ ., 
+          data = heart_training, 
+          kmax = 50)
+
+```
+
+
+
+```{r}
+# Fit the model 
+knn_optimal <-  kknn(HeartDisease ~ ., 
+                     train = heart_training, 
+                     test = heart_training,
+                     k = 33, distance = 2)
+
+# Create results data frame with training data
+knn_training_results <- data.frame(heart_training,
+                                   knn_pred_0.5 = knn_optimal$fitted.values,
+                                   knn_optimal$prob)
+
+# View results
+knn_training_results %>% slice(1:5)
+
+```
+
+
+```{r}
+# Search for optimal cut-off probability
+cf_matrix(actual_vec = knn_training_results$HeartDisease,
+          pred_prob_vec = knn_training_results$Yes,
+          positive_val = "Yes", search_cut = TRUE)
+
+```
+
+
+```{r}
+# Fit the optimal model and obtain predictions on the test data
+knn_optimal_test <-  kknn(HeartDisease ~ ., 
+                          train = heart_training, 
+                          test = heart_test,
+                          k = 33, distance = 2)
+
+# Create results data frame with test data
+knn_test_results <- data.frame(heart_test,
+                               knn_pred_0.5 = knn_optimal_test$fitted.values,
+                               knn_optimal_test$prob)
+
+# Add predictions for optimal cut-off
+knn_test_results <- knn_test_results %>% 
+                    mutate(knn_pred_optimal = ifelse(Yes >= 0.35, "Yes", "No"))
+
+# View results
+knn_test_results %>% slice(1:5)
+
+
+```
+
+
+```{r}
+# Detailed results on the test data
+cf_matrix(actual_vec = knn_test_results$HeartDisease,
+          pred_prob_vec = knn_test_results$Yes,
+          positive_val = "Yes", cut_prob = 0.35)
+
+```
+
+
+
+```{r}
+set.seed(314)
+
+heart_training_tree <- rpart(HeartDisease ~ .,
+                             data = heart_training,
+                             method = "class", 
+                             control = rpart.control(cp = 0, minbucket = 4))
+```
+
+
+```{r}
+printcp(heart_training_tree)
+
+# Create a 1 SD interval for the minimum observed xerror
+# This is a vector with (xerror - xstd, xerror + xstd) 
+
+c(0.5 - 0.0659, 0.5 + 0.0659) 
+
+```
+
+
+```{r}
+heart_pruned_tree <- prune(heart_training_tree, cp = 0.05)
+
+```
+
+
+```{r}
+rpart.plot(heart_pruned_tree, type = 4, extra = 103, digits = -3,
+           box.palette="GnBu", branch.lty=3, branch.lwd = 3,
+           shadow.col="gray", gap = 0, tweak = 1.1)
+
+```
+
+
+```{r}
+dt_training_results <- data.frame(heart_training,
+                                  predict(heart_pruned_tree,
+                                          newdata = heart_training,
+                                          type = "prob"))
+
+# View results
+dt_training_results %>% slice(1:5)
+
+```
+
+
+```{r}
+cf_matrix(actual_vec = dt_training_results$HeartDisease,
+          pred_prob_vec = dt_training_results$Yes,
+          positive_val = "Yes", search_cut = TRUE)
+
+```
+
+
+```{r}
+# Test data results
+dt_test_results <- data.frame(heart_test,
+                              predict(heart_pruned_tree,
+                                      newdata = heart_test,
+                                      type = "prob"))
+
+# Add predictions for optimal cut-off
+dt_test_results <- dt_test_results %>% 
+                   mutate(tree_pred_optimal = ifelse(Yes >= 0.325, "Yes", "No"))
+
+# View results
+dt_test_results %>% slice(1:5)
+
+```
+
+
+```{r}
+# Detailed results on the test dataset
+cf_matrix(actual_vec = dt_test_results$HeartDisease,
+          pred_prob_vec = dt_test_results$Yes,
+          positive_val = "Yes", cut_prob = 0.325)
+
+```
+
