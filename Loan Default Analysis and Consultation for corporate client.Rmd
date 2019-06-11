@@ -1,0 +1,502 @@
+
+
+```{r}
+# Add all library you will need here
+library(tidyverse)
+
+# This will read in the data frame
+loan_data <- readRDS(file = "/cloud/project/Final Project/loan_data.rds")
+
+# Create training and test data
+set.seed(314)
+train_index <- sample(1:nrow(loan_data), floor(0.7*nrow(loan_data)))
+
+# training
+loan_training <- loan_data[train_index, ]
+
+# test
+loan_test <- loan_data[-train_index, ]
+
+# Function for analyzing confusion matrices
+cf_matrix <- function(actual_vec, pred_prob_vec, positive_val, 
+                      cut_prob = 0.5, search_cut = FALSE) {
+  
+  if (search_cut == FALSE) {
+  actual <- actual_vec == positive_val; pred <- pred_prob_vec >= cut_prob
+  P <- sum(actual); N <- length(actual) - P; TP <- sum(actual & pred)
+  FN <- P - TP; TN <- sum(!(actual) & !(pred)); FP <- N - TN
+  
+  if (TP != 0) { Precision <- TP/(TP + FP); Recall <- TP/(TP + FN)
+                 F1 <- 2*((Precision*Recall)/(Precision + Recall))}
+  
+  if(TP == 0) { Precision = 0; Recall = 0; F1 = 0 }
+ 
+  model_results <- list(confusion_matrix = 
+    data.frame(metric = c("Correct", "Misclassified", "True Positive",
+                           "True Negative","False Negative", "False Positive"),
+               observations = c(TN + TP, FN + FP, TP, TN, FN, FP),
+               rate = c((TN + TP)/(N + P), (FN + FP)/(N + P), TP/P, TN/N, FN/P, FP/N),
+               pct_total_obs = c((TN + TP), (FN + FP), TP, TN, FN, FP)*(1/(N + P)),
+               stringsAsFactors = FALSE),
+    F1_summary = 
+    data.frame(metric = c("Precision", "Recall", "F1 Score"),
+               value = c(Precision, Recall, F1),
+               stringsAsFactors = FALSE))
+return(model_results) } 
+ 
+  if (search_cut == TRUE) {
+    optimal_cut = data.frame(cut_prob = seq(0,1, by = 0.05),
+                             correct_rate = NA, F1_score = NA,
+                             false_pos_rate = NA, false_neg_rate = NA)
+    
+    for (row in (1:nrow(optimal_cut))) {
+      actual <- actual_vec == positive_val 
+      pred <- pred_prob_vec >= optimal_cut$cut_prob[row]
+      P <- sum(actual); N <- length(actual) - P
+      TP <- sum(actual & pred); FN <- P - TP
+      TN <- sum(!(actual) & !(pred)); FP <- N - TN
+  
+      if (TP != 0) { Precision <- TP/(TP + FP); Recall <- TP/(TP + FN)
+          F1 <- 2*((Precision*Recall)/(Precision + Recall))}
+  
+      if(TP == 0) { Precision = 0; Recall = 0; F1 = 0 }
+      
+      optimal_cut[row, 2:5] <- c((TN + TP)/(N + P), F1, FP/N, FN/P)
+    } 
+return(optimal_cut)
+  }
+}
+
+```
+
+
+
+Do loan default rates differ by customer age?
+
+Findings: Yes, customers between 35 and 50 years old have significantly lower default rates than other customers. Customer age appears to be a strong predictor of loan default.
+
+```{r}
+# Summary table
+default_by_age <- loan_data %>% group_by(age_category) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+
+# View results
+default_by_age
+
+# Plot the relationship
+ggplot(data = default_by_age, mapping = aes(x = age_category, y = customers_who_defaulted)) +
+   geom_boxplot(fill = "#006EA1") +
+  labs(title = "Loan Default Rates by Customer Age Category",
+        x = "Customer Age",
+        y = "Proportion of Loan Default (Yes/No)") 
+
+```
+
+
+
+1) Does education level act as a predictor for loan default rate?
+```{r}
+default_by_highestedlevel<- loan_data %>% group_by(highest_ed_level) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_highestedlevel
+
+ggplot(data = loan_data, mapping = aes(x = highest_ed_level, fill = loan_default)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Default Rates by Customer Education Level",
+        x = "Customer Education Level",
+        y = "Proportion of Loan Default (Yes/No)") +
+  coord_flip()
+
+
+```
+Findings: We can see that people with only a highschool education default the most, and people with a PhD are about 50% more likely to default than people with a Masters or Bachalors, who are virtually at the same level of risk. Maybe this is because people with higher levels of education carry more student debt?
+
+
+
+2) Does the number of bankruptcies a customer had predict default in the future? 
+```{r}
+default_by_bankruptcies<- loan_data %>% group_by(pub_rec_bankruptcies) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_bankruptcies
+
+ggplot(data = loan_data, mapping = aes(x = pub_rec_bankruptcies, fill = loan_default)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Default Rates by Customer aggregate bankruptcies",
+        x = "Customer number of bankruptcies",
+        y = "Proportion of Loan Default (Yes/No)") +
+  coord_flip()
+
+
+```
+
+Findings: People with 3 bankruptcies default the most. People with 4 bankruptcies had zero defaults in our data set. Probably because these people represent the most at risk group who are the least likely to secure new credit.
+
+
+3) What role does fico score play as a predictor of default rate?
+```{r}
+loan_data <- loan_data %>%
+mutate(fico_category = case_when(fico_score >= 300 & fico_score <= 575 ~ "Bad (300 to 575)",
+                     fico_score > 575 & fico_score <= 650 ~ "Poor (576 to 650)",
+                     fico_score > 650 & fico_score <= 700 ~ "Fair (651 to 700)",
+                     fico_score > 700 & fico_score <= 750 ~ "Good (701 to 750)",
+                     fico_score > 750 & fico_score <= 850 ~ "Excellent (751 to 850)")) 
+
+default_by_ficocategory<- loan_data %>% group_by(fico_category) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_ficocategory
+     
+                                                                                         
+```
+findings: We can see that customers in the "bad" caetegory have a 46.7% default rate. People in the "excellent" category default almost 9 times less often than customers in the "bad" category. All other categories fall in between. 
+
+
+4) Are customers higher risk by gender?
+
+```{r}
+default_by_gender<- loan_data %>% group_by(gender) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_gender
+
+ggplot(data = loan_data, mapping = aes(x = gender)) +
+       geom_bar(stat = "count")
+```
+
+We can see from these results that males defaulted more than twice as much as females.
+
+5) We know that males default more than females overall, but what influence does age have within each gender?
+```{r}
+default_by_genderandage <- loan_data %>% group_by(gender, age_category) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_genderandage
+
+
+ggplot(data = default_by_genderandage , mapping = aes(x = age_category, y = customers_who_defaulted,                         color = gender)) +
+            geom_point() +
+            facet_wrap(~ gender, nrow = 1)
+     
+```
+Males less than 24 years of age are mostly likely to default, and females aged 35-40 are least likely to default. Looking at the data points on the graph, we observe that this is true accross all age ranges, with 35-40 having the largest variance. 
+
+
+6) Should we factor region in a customers risk profile?
+```{r}
+default_by_region <- loan_data %>% group_by(us_region_residence) %>% 
+                  summarise(total_customers = n(),
+                            customers_who_defaulted = sum(loan_default == "Yes")) %>% 
+                  mutate(default_rate = customers_who_defaulted / total_customers)
+default_by_region
+
+```
+Findings: People who live in the Northeast and the Midwest default at a disproportionate rate to the overall population. People in these regions should be considered higher risk overall. Customers in the south and southwest default the least. We possibly should factor in region to a customer's risk profile. 
+
+7) Bubble Chart that factors in total_customers to group sizes
+```{r}
+ggplot(data = default_by_genderandage, 
+       mapping = aes(x = age_category, y = customers_who_defaulted, 
+                     color = gender)) + 
+    geom_point(mapping = aes(size = total_customers)) + 
+      labs(title = "Customer age group vs How many defaults relative to number of customers in each group",
+          x = "Customer Age Group", y = "Number customers who defaulted")
+
+
+```
+
+Findings: This is a similar model as previously used, but with the addition of the bubble chart gives us a visual representation of how many customers are within each group. We can see that customers less than 24 years of age contain about the same amount of customers between genders, but total defaults amoung Females is higher then Males. This means that Females in this age group are about 40% more risky. In the age group of 51 or older, the total number of male customers is significantly smaller than the total number of females. This being said, the total number of defaults amoung males is still higher then females in this age group. This means males are more risky in this age group, and we should possibly factor this into our summary of our findings. 
+
+8) What proportion of our customers fall into each integer fico score cataegory by gender? Should we consider this relation when developing risk profiles?
+```{r}
+ggplot(data = loan_data, mapping = aes(x = fico_score, y = ..density.., fill = gender)) +
+       geom_histogram(color = "white", bins = 12) + 
+       facet_wrap( ~ gender, nrow = 1) +
+       labs(title = "Distribution of Customer Fico Scores",
+            x = "Integer Fico Score",
+            y = "Proportion of Customers")
+```
+Findings: We can see that for the most part, customer fico score totals by gender group trend to be about the same proportion. This piece of data would likely not be useful to our analysis. 
+
+```{r}
+ggplot(data = loan_data, mapping = aes(x = loan_amnt, y = adjusted_annual_inc, color = loan_default)) +
+      geom_point(alpha = 0.4) +
+      geom_smooth(method = "lm", se = FALSE, color = "black") +
+      facet_grid(loan_default ~ residence_property) +
+      labs(title = "Correlation Between Loan Amount and Income by Default Status and Rent/Own",
+        x = "Loan Amount ($)", y = "Adjusted Annual Income ($)")
+
+```
+Findings: Although this graph is a bit crowded, it gives us some powerful insight. We can see for the most part that the people who default on their loans have overall lower adjusted income. This is intuitive, but we can also see also see that people who rent on average have lower income, and subsequently lower loan amounts as a result. Amoung those who have defaulted, the regression model betweew those who rent, and those who own is very similar. This suggests that ownership status is an overall weak variable in trying to predict default rate in our model, but we will get to that in specifics later. 
+
+
+**Variable Selection**
+
+**Random Forest Variable Importance**
+Creating upper and lower model for mixed variable selection. 
+```{r}
+upper_bound_model <- glm(loan_default ~ residence_property + gender + age_category + highest_ed_level 
+                         + us_region_residence + loan_amnt + adjusted_annual_inc + pct_loan_income +                               fico_score + dti + inq_last_6mths + open_acc + bc_util + num_accts_ever_120_pd                          + pub_rec_bankruptcies,
+                   data = loan_training,
+                   family = "binomial")
+
+
+lower_bound_model <- glm(loan_default ~ 1, data = loan_training, family = "binomial")
+
+
+
+results_mixed <- step(lower_bound_model, 
+                      scope = list(lower = lower_bound_model, upper = upper_bound_model), 
+                      direction = "both", trace = 0)
+
+
+
+summary(results_mixed)
+```
+
+```{r}
+
+```
+
+Summary and Analysis of results: We can determine how important a predictor is in our model by examining the p-values for our z-statistics in our "results_mixed" summary output. If H0 is true, then the probability of defaulting does not depend on said predictor. By examining the p-values in the results mixed summary, we can see that predictors fico_score, highest_ed_level, us_region_residence, age_category, gender, bc_util, inq_last_6mths, adjusted_annual_inc, residence_property yeild low p-scores, and we have evidence to suggest that loan_default does depend on them. 
+
+
+
+Naive Bayes model: 
+
+
+```{r}
+loan_naive_bayes_model <- naiveBayes(loan_default ~ fico_score + highest_ed_level + us_region_residence + age_category + gender + bc_util + inq_last_6mths + adjusted_annual_inc + residence_property,
+                                data = loan_training)
+
+summary(loan_naive_bayes_model)
+```
+
+Here Im making predictions and building confusion matrix. Also athering all results on the **training** dataset.
+
+```{r}
+nb_training_results <- data.frame(loan_training,
+                                  nb_predicted_0.5 = predict(loan_naive_bayes_model,
+                                                           newdata = loan_training,
+                                                           type = "class"),
+                                  predict(loan_naive_bayes_model,
+                                          newdata = loan_training,
+                                          type = "raw"))
+```
+
+I am using the **cf_matrix** function on the nb_training results data to choose the best probability cut-off based based on the F1 score.
+
+Best cutoff is 0.35 as it has the highest f1 score. However, we want to minimize false negatives, which means that we want to minimize the chance that we predict that someone did not default when in fact they did. This will be very important as it will keep us from losing money to bad debts. To take this into account, will will use 0.25. 
+```{r}
+cf_matrix(actual_vec = nb_training_results$loan_default,
+          pred_prob_vec = nb_training_results$Yes,
+          positive_val = "Yes", search_cut = TRUE)
+```
+
+Im using my trained model and the optimal cut_off to make a results data frame using the **loan_test** data that contains the predicted response value at the optimal cut_off and the predicted posterior probabilities on my test data set.
+
+```{r}
+nb_test_results <- data.frame(loan_test,
+                              nb_predicted_0.5 = predict(loan_naive_bayes_model,
+                                                         newdata = loan_test,
+                                                         type = "class"),
+                              predict(loan_naive_bayes_model,
+                                      newdata = loan_test,
+                                      type = "raw"))
+
+nb_test_results <- nb_test_results %>% mutate(nb_optimal = ifelse(Yes >= 0.25, "Yes", "No"))
+
+```
+
+Using the cf_matrix function to generate the detailed results on the test dataset using the optimal cut-off probability. 
+
+```{r}
+cf_matrix(actual_vec = loan_test$loan_default,
+          pred_prob_vec = nb_test_results$Yes,
+          positive_val = "Yes",
+          cut_prob = 0.25)
+```
+
+naive bayes yeilded an f1 score of 0.66. Our overall accuracy was almost 84%, but we achieved our objective of minimizing false negatives, at just a bit under 7%. 
+
+```{r}
+
+
+
+
+```
+
+
+LDA
+
+Im using the LDA model to create a results data frame named **training_lda_results** which holds the loan_training data, the predicted *loan_default* at a default 0.5 probability cut-off, and the estimated posterior probabilities for "Yes" and "No". Also obtaining predictions. 
+
+```{r}
+loan_lda_model <- lda(loan_default ~ fico_score + highest_ed_level + us_region_residence + age_category + gender + bc_util + inq_last_6mths + adjusted_annual_inc + residence_property,
+                       data = loan_training,
+                       CV = FALSE)
+
+lda_pred_training <- predict(loan_lda_model, newdata = loan_training)
+
+
+```
+
+Using this code to store results of model training. 
+```{r}
+
+lda_results_training <- data.frame(loan_training,
+lda_pred_0.5 = lda_pred_training$class,
+lda_pred_training$posterior) 
+```
+
+Searching for optimal cutoff. 
+
+Optimal cutoff is 0.25. But again, we want to minimize false negatives. So we will use 0.20. 
+```{r}
+cf_matrix(actual_vec = lda_results_training$loan_default,
+pred_prob_vec = lda_results_training$Yes,
+positive_val = "Yes", search_cut = TRUE)
+```
+
+
+Im applying my trained model with the optimal probability cut-off to the test data set in order to estimate model accuarcy.
+
+```{r}
+lda_pred_test <- predict(loan_lda_model, newdata = loan_test)
+```
+
+Storing results of model performance on test data. 
+
+```{r}
+lda_results_test <- data.frame(loan_test,
+lda_pred_0.20 = lda_pred_test$class,
+lda_pred_test$posterior)
+```
+
+Adding predicted default values at optimal cut-off of 0.20. 
+```{r}
+lda_results_test <- lda_results_test %>%
+mutate(lda_pred_0.25 = ifelse(Yes >= 0.20,
+"Yes", "No"))
+```
+
+Full detailed results on the test data set using function **cf_matrix**
+```{r}
+cf_matrix(actual_vec = lda_results_test$loan_default,
+pred_prob_vec = lda_results_test$Yes,
+positive_val = "Yes", cut_prob = 0.20)
+```
+
+The LDA model resulted in an F1 Score of 0.64 on the test data set, slightly under-performing compared to the naive bayes model (F1 Score of 0.66). False negative rate for LDA was slightly lower than naivebayes, however. We also saw about 82% accuracy with this model. 
+```{r}
+```
+
+
+```{r}
+```
+
+```{r}
+
+```
+
+
+Decision Tree 
+
+```{r}
+loan_training_tree2 <- rpart(loan_default ~ fico_score + highest_ed_level + us_region_residence + age_category + gender + bc_util + inq_last_6mths + adjusted_annual_inc + residence_property,
+                             data = loan_training,
+                             method = "class", 
+                             control = rpart.control(cp = 0, minbucket = 4))
+```
+
+
+Finding the best *cp* value based on cross validation results using the printcp() function.
+
+From my results below, the minimum **xerror** value is 0.63805 with a standard deviation of 0.087970. A one standard deviation interval for this estimate is **(0.6077349, 0.6683593)**. The minimum **nsplit** value that has an **xerror** within this interval is row 12, with **nsplit** = 20.
+
+```{r}
+printcp(loan_training_tree2)
+
+cp_results <- loan_training_tree2$cptable %>% data.frame()
+
+cp_results %>% filter(xerror == min(xerror)) %>% mutate(lower_value = xerror - xstd,
+upper_value = xerror + xstd)
+```
+
+Pruning the large tree using the optimal *cp* value. 
+
+```{r}
+pruned_training_tree <- prune(loan_training_tree2, cp = 0.0062)
+```
+
+Visualizing my pruned tree model with **rpart.plot**. 
+
+```{r}
+rpart.plot(pruned_training_tree, type = 4, extra = 103, digits = -3,
+           box.palette="GnBu", branch.lty=3, branch.lwd = 3,
+           shadow.col="gray", gap = 0, tweak = 1.1)
+```
+
+Creating a training results data frame using the *training* data. Also adding the estimated posterior probabilities for "Yes" and "No" from the trained model. 
+
+```{r}
+dt_training_results <- data.frame(loan_training,
+                                  predict(pruned_training_tree,
+                                          newdata = loan_training,
+                                          type = "prob"))
+
+# View results
+dt_training_results %>% slice(1:5)
+```
+
+Using my *cf_matrix* function to search for the optimal cut-off probability on the training data results.
+
+optimal cut off = 0.45 (7 averaged together). We want to minimize false negatives, so we will actually use 0.15. 
+```{r}
+cf_matrix(actual_vec = dt_training_results$loan_default,
+          pred_prob_vec = dt_training_results$Yes,
+          positive_val = "Yes", search_cut = TRUE)
+```
+
+
+Creating a test results data frame using the *test* data. Also adding the predicted response values at the optimal cut-off and the estimated posterior probabilities for "Yes" and "No" using my trained decision tree model.
+
+```{r}
+
+dt_test_results <- data.frame(loan_test,
+                              predict(pruned_training_tree,
+                                      newdata = loan_test,
+                                      type = "prob"))
+
+
+dt_test_results <- dt_test_results %>% 
+                   mutate(tree_pred_optimal = ifelse(Yes >= 0.15, "Yes", "No"))
+
+
+dt_test_results %>% slice(1:5)
+```
+
+Using the *cf_matrix* function to display the detailed performance output of the Decision Tree classifier on the test dataset with the averaged optimal probability cut-off value of 0.15. 
+
+```{r}
+cf_matrix(actual_vec = dt_test_results$loan_default,
+          pred_prob_vec = dt_test_results$Yes,
+          positive_val = "Yes", cut_prob = 0.15)
+```
+
+The decision tree model resulted in an F1 Score of 0.51 on the test data set, under-performing compared to both the naive bayes model, as well as the LDA model. It also had a lower false negative rate than the LDA and naive bayes model, but was also less accurate overall, with a correct rate of 67%. 
+
+**Summary of Findings and Recommendations**
+Through our EDA analysis, we determined that the key factors that contribute to loan default are fico score, education level, residence, age, and gender. Amount of inquries, adjusted annual income, and property rent or own also play a role, but not as much as the other five. What really stuck out to use was that education level, residence, gender, and age have a massive influence in predicting default. Fico score is obvious, as people with lower fico scores are higher risk, but people in the age category of 24-29, people who live in the midwest, and the less educated people are have a disproportionate influence compared to other variables. 
+
+Our best model is naive-bayes. It has the highest level of accuracy at 84%, as well as the highest f1 score of 0.66. The training and test f1 scores are also closest together of all 3 models. At the same time, the false negative rate of 0.068 is only marginally higher than the other two models, but it is disproportionatly more accurate. In other words, this model best balances accuracy, with minimizing the false negative rate, which is exactly what we are looking for in this case. We want to minimize false negative rates as this means we are minimizing the chance of lending to someone that may default. This is important becuase we want to minimize the chance of lending to people that cannot pay their debt back. There are more laws and policies in favor of consumers, and we can kiss that money goodbye if the person defaults and we are unable to, or it is too expensive to collect. False positives can be bad too as we may lose money on interest, but this is negligible compared to losing the principle and the interest of the loan due to bad debts.
+
+You can improve default rates by not lending to people with a fico score below 650. Also, put heavy weight on a persons age. For example, someone with good or excellent credit in the 25-29 age group should be paying more interest than someone with the same fico score in a higher age group until about the age of 55-65. People who live in the midwest should have more vetting, perhaps stricter lending poicies such as verification of income and employment. If a person's debt to income ratio is above 40-45%, they should not qualify for a loan. Also, the lower the education level, the stricter the lending policies should be. Males carry almost twice the risk of females, and they should pay marginally higher interest rates, as well as have more vetting in the lending process. 
